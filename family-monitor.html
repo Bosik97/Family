@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0E6C5F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Семья">
+<title>Активность в сети</title>
+<style>
+  :root{
+    --bg:#F7F8FA; --card:#FFFFFF; --border:#E6E8EC;
+    --text:#101317; --muted:#5B6472;
+    --accent:#0E6C5F; --accent-soft:#E6F2F0;
+    --red:#B23B31; --red-soft:#FBEAE8;
+    color-scheme: light;
+  }
+  html{ color-scheme:light; background:var(--bg); }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    min-height:100vh;
+    padding:calc(20px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
+  }
+  .wrap{max-width:520px;margin:0 auto;}
+  h1{font-size:20px;margin:0 0 4px;}
+  .sub{font-size:13px;color:var(--muted);margin-bottom:16px;}
+
+  .tabs{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;}
+  .tabs button{
+    border:1px solid var(--border);background:var(--card);color:var(--muted);
+    padding:8px 14px;border-radius:99px;font-size:13px;font-weight:600;white-space:nowrap;cursor:pointer;
+  }
+  .tabs button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+  select, input[type=text]{
+    width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);
+    border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:10px;font-family:inherit;
+  }
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:10px;}
+  .row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+  .domain{font-size:15px;font-weight:600;word-break:break-all;}
+  .domain.flag{color:var(--red);}
+  .meta{font-size:12px;color:var(--muted);margin-top:4px;}
+  .badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px;white-space:nowrap;}
+  .badge.blocked{background:var(--red-soft);color:var(--red);}
+  .badge.allowed{background:var(--accent-soft);color:var(--accent);}
+  .flag-icon{color:var(--red);font-weight:700;margin-right:4px;}
+
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0;}
+  .toolbar{display:flex;gap:8px;margin-bottom:12px;}
+  .btn{flex:1;border:none;border-radius:10px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;color:#fff;background:var(--accent);}
+  .btn-secondary{background:var(--card);color:var(--text);border:1px solid var(--border);}
+
+  .center-screen{padding-top:20vh;text-align:center;}
+  .center-screen p{font-size:14px;color:var(--muted);line-height:1.5;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">Загрузка…</div></div>
+
+<script>
+// --- заполните перед загрузкой на GitHub Pages ---
+const WORKER_URL = 'https://nextdns-proxy.beibarys2897.workers.dev/';
+const TOKEN = 'kz9Fj3mQx7vLp2Wn8Rt5';
+// ---------------------------------------------------
+
+// Домены/ключевые слова для пометки как «взрослый контент». NextDNS также
+// присылает свои теги категорий (reasons) — они проверяются отдельно и надёжнее.
+const ADULT_KEYWORDS = [
+  'porn','xxx','xvideos','xnxx','pornhub','redtube','xhamster','brazzers',
+  'onlyfans','chaturbate','livejasmin','hentai','camsoda','youporn',
+  'spankbang','tube8','365porn','fapdungeon','xhcdn','rule34'
+];
+
+let currentFilter = 'all';
+let rawLogs = [];
+
+function isAdult(item){
+  const domain = (item.domain || '').toLowerCase();
+  const reasons = JSON.stringify(item.reasons || item.category || '').toLowerCase();
+  return ADULT_KEYWORDS.some(k => domain.includes(k)) ||
+         reasons.includes('porn') || reasons.includes('nudity') || reasons.includes('adult');
+}
+
+async function api(endpoint, params){
+  const qs = new URLSearchParams({ token: TOKEN, endpoint, ...(params||{}) });
+  const res = await fetch(`${WORKER_URL}?${qs.toString()}`);
+  return res.json();
+}
+
+function fmtTime(ts){
+  const d = new Date(ts);
+  return d.toLocaleString('ru-RU', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+}
+
+// NextDNS log entries can arrive with slightly different field names
+// depending on account/version — normalize defensively here.
+function normalize(item){
+  return {
+    domain: item.domain || item.name || item.query || '—',
+    ts: item.timestamp || item.time || item.date || Date.now(),
+    device: (item.device && (item.device.name || item.device.id)) || item.deviceName || 'Неизвестно',
+    status: item.status || (item.blocked ? 'blocked' : 'allowed'),
+    reasons: item.reasons || item.category || null,
+  };
+}
+
+async function load(){
+  const app = document.getElementById('app');
+  if(!WORKER_URL.includes('workers.dev') && !WORKER_URL.startsWith('https://') || WORKER_URL.includes('ВАШ')){
+    app.innerHTML = `<div class="center-screen"><p>Впишите свой WORKER_URL и TOKEN в начало файла перед загрузкой на GitHub Pages.</p></div>`;
+    return;
+  }
+  try{
+    const data = await api('logs', {limit: 300});
+    const list = data.data || data.logs || data.result || (Array.isArray(data) ? data : []);
+    rawLogs = list.map(normalize).sort((a,b) => new Date(b.ts) - new Date(a.ts));
+    render();
+  }catch(e){
+    app.innerHTML = `<div class="center-screen"><p>Не удалось загрузить данные. Проверьте WORKER_URL, токен и API-ключ NextDNS.</p></div>`;
+  }
+}
+
+function render(){
+  const app = document.getElementById('app');
+  let items = rawLogs;
+  if(currentFilter === 'blocked') items = items.filter(i => i.status === 'blocked');
+  if(currentFilter === 'adult') items = items.filter(isAdult);
+
+  const devices = [...new Set(rawLogs.map(i => i.device))];
+
+  app.innerHTML = `
+    <h1>Активность в сети</h1>
+    <div class="sub">Последние ${rawLogs.length} запросов · обновлено ${new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}</div>
+
+    <div class="toolbar">
+      <button class="btn" id="refreshBtn">Обновить</button>
+    </div>
+
+    <div class="tabs">
+      <button class="${currentFilter==='all'?'active':''}" data-f="all">Все (${rawLogs.length})</button>
+      <button class="${currentFilter==='blocked'?'active':''}" data-f="blocked">Заблокированные (${rawLogs.filter(i=>i.status==='blocked').length})</button>
+      <button class="${currentFilter==='adult'?'active':''}" data-f="adult">⚠️ Взрослый контент (${rawLogs.filter(isAdult).length})</button>
+    </div>
+
+    ${items.length ? items.map(i => `
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="domain ${isAdult(i)?'flag':''}">${isAdult(i)?'<span class="flag-icon">⚠️</span>':''}${escapeHtml(i.domain)}</div>
+            <div class="meta">${fmtTime(i.ts)} · ${escapeHtml(i.device)}</div>
+          </div>
+          <div class="badge ${i.status==='blocked'?'blocked':'allowed'}">${i.status==='blocked'?'заблокировано':'разрешено'}</div>
+        </div>
+      </div>
+    `).join('') : `<div class="empty">Ничего не найдено по этому фильтру</div>`}
+  `;
+
+  document.getElementById('refreshBtn').onclick = load;
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => { currentFilter = b.dataset.f; render(); });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+load();
+</script>
+</body>
+</html>
